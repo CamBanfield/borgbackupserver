@@ -4777,55 +4777,6 @@ const csrfToken = '<?= $this->csrfToken() ?>';
         expand.textContent = '▼';
     }
 
-    // Replace the client's API key. The new key is shown once here and also
-    // written into the install command above, since that command is how the
-    // key normally reaches a machine.
-    (function () {
-        const btn = document.getElementById('rotateKeyBtn');
-        if (!btn) return;
-        const box = document.getElementById('rotateKeyResult');
-
-        btn.addEventListener('click', async function () {
-            if (!confirm('Replace this client\'s API key?\n\nThe current key stops working immediately. The client will not be able to report until the new key is on the machine.')) return;
-
-            btn.disabled = true;
-            const label = btn.innerHTML;
-            btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Replacing…';
-            try {
-                const r = await fetch(`/clients/${agentId}/rotate-key`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken },
-                    credentials: 'same-origin',
-                    body: '{}',
-                });
-                const d = await r.json();
-                if (!r.ok || d.error) throw new Error(d.error || ('HTTP ' + r.status));
-
-                // Rewrite both install commands so a copy after rotating is
-                // the working one rather than the revoked key.
-                document.querySelectorAll('#installCmdLinux, #installCmdWindows').forEach(function (el) {
-                    el.textContent = el.textContent.replace(/[0-9a-f]{64}/g, d.api_key);
-                });
-
-                box.classList.remove('d-none', 'alert-danger');
-                box.classList.add('alert-warning');
-                box.innerHTML =
-                    '<div class="fw-semibold mb-1"><i class="bi bi-key me-1"></i>New API key</div>' +
-                    '<code class="user-select-all d-block mb-2" style="word-break:break-all;">' + d.api_key + '</code>' +
-                    '<div class="small mb-1">The old key no longer works. Put this one in ' + d.reconfigure_location + '.</div>' +
-                    '<pre class="small mb-0 mt-2" style="white-space:pre-wrap;">' + d.reconfigure_instructions + '</pre>';
-                box.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-            } catch (e) {
-                box.classList.remove('d-none', 'alert-warning');
-                box.classList.add('alert-danger');
-                box.textContent = 'Could not replace the key: ' + e.message;
-            } finally {
-                btn.disabled = false;
-                btn.innerHTML = label;
-            }
-        });
-    })();
-
     async function fetchTree(path, depth, replaceChildren = false, anchorLi = null, forceRefresh = false) {
         const body = {
             path,
@@ -5045,6 +4996,57 @@ const csrfToken = '<?= $this->csrfToken() ?>';
         const rp = rootForCurrentAgent();
         rootPathEl.textContent = rootLabelForCurrentAgent();
         fetchTree(rp, 2);
+    });
+})();
+</script>
+
+<script>
+// Replace the client's API key. The new key is shown once here and also
+// written into the install command above, since that command is how the
+// key normally reaches a machine.
+(function () {
+    const btn = document.getElementById('rotateKeyBtn');
+    if (!btn) return;
+    const box = document.getElementById('rotateKeyResult');
+
+    btn.addEventListener('click', async function () {
+        if (!confirm('Replace this client\'s API key?\n\nThe current key stops working immediately. The client will not be able to report until the new key is on the machine.')) return;
+
+        btn.disabled = true;
+        const label = btn.innerHTML;
+        btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Replacing…';
+        try {
+            const r = await fetch('/clients/<?= (int) $agent['id'] ?>/rotate-key', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken },
+                credentials: 'same-origin',
+                body: '{}',
+            });
+            const d = await r.json();
+            if (!r.ok || d.error) throw new Error(d.error || ('HTTP ' + r.status));
+
+            // Rewrite both install commands so a copy after rotating is
+            // the working one rather than the revoked key.
+            document.querySelectorAll('#installCmdLinux, #installCmdWindows').forEach(function (el) {
+                el.textContent = el.textContent.replace(/[0-9a-f]{64}/g, d.api_key);
+            });
+
+            box.classList.remove('d-none', 'alert-danger');
+            box.classList.add('alert-warning');
+            box.innerHTML =
+                '<div class="fw-semibold mb-1"><i class="bi bi-key me-1"></i>New API key</div>' +
+                '<code class="user-select-all d-block mb-2" style="word-break:break-all;">' + d.api_key + '</code>' +
+                '<div class="small mb-1">The old key no longer works. Put this one in ' + d.reconfigure_location + '.</div>' +
+                '<pre class="small mb-0 mt-2" style="white-space:pre-wrap;">' + d.reconfigure_instructions + '</pre>';
+            box.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        } catch (e) {
+            box.classList.remove('d-none', 'alert-warning');
+            box.classList.add('alert-danger');
+            box.textContent = 'Could not replace the key: ' + e.message;
+        } finally {
+            btn.disabled = false;
+            btn.innerHTML = label;
+        }
     });
 })();
 </script>
