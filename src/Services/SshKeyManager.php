@@ -134,6 +134,137 @@ class SshKeyManager
     }
 
     /**
+     * Give an existing client a new SSH key pair and rebuild its access on
+     * this server: the Unix user (recreated if it is gone), its home folder as
+     * the database records it, and authorized_keys. Plans, repositories, jobs
+     * and the catalogue are untouched. The agent fetches the new private key
+     * from /api/agent/ssh-key the next time it starts (#537).
+     *
+     * The Unix username is kept when there is one: repository paths embed it.
+     */
+    public static function reprovisionClient(array $agent, ?string $actor = null): ?array
+    {
+        $db = Database::getInstance();
+        $agentId = (int) $agent['id'];
+
+        $unixUser = (string) ($agent['ssh_unix_user'] ?? '');
+        if ($unixUser === '') {
+            $unixUser = self::generateUnixUser((string) ($agent['name'] ?? ''));
+            $existing = $db->fetchOne("SELECT id FROM agents WHERE ssh_unix_user = ? AND id != ?", [$unixUser, $agentId]);
+            if ($existing) {
+                $unixUser = $unixUser . '-' . $agentId;
+            }
+        }
+
+        $homeDir = (string) ($agent['ssh_home_dir'] ?? '');
+        if ($homeDir === '') {
+            $homeDir = self::defaultHomeDir($agentId);
+        }
+
+        $keys = self::generateKeyPair();
+
+        $output = self::runHelper('rekey-user', $unixUser, $homeDir, $keys['public_key']);
+        if ($output === null || !str_contains($output, 'OK')) {
+            $detail = $output ?: (self::$lastHelperError ?? 'bbs-ssh-helper returned no output');
+            self::$lastHelperError = $detail;
+            $db->insert('server_log', [
+                'agent_id' => $agentId,
+                'level' => 'error',
+                'message' => "SSH access repair failed: {$detail}",
+            ]);
+            return null;
+        }
+
+        $db->update('agents', [
+            'ssh_unix_user' => $unixUser,
+            'ssh_public_key' => $keys['public_key'],
+            'ssh_private_key_encrypted' => Encryption::encrypt($keys['private_key']),
+            'ssh_home_dir' => $homeDir,
+        ], 'id = ?', [$agentId]);
+
+        $by = $actor ? " by {$actor}" : '';
+        $db->insert('server_log', [
+            'agent_id' => $agentId,
+            'level' => 'warning',
+            'message' => "SSH access repaired{$by} for client \"" . ($agent['name'] ?? $agentId)
+                . "\" ({$unixUser}, {$homeDir}) — the previous SSH key no longer works; restart the agent so it fetches the new one",
+        ]);
+
+        return [
+            'unix_user' => $unixUser,
+            'public_key' => $keys['public_key'],
+            'home_dir' => $homeDir,
+        ];
+    }
+
+    /**
+     * Why SSH access cannot be repaired right now, or null when it can.
+     * A job the agent is running over SSH would die with the old key.
+     */
+    public static function reprovisionBlockedReason(int $agentId): ?string
+    {
+        $db = Database::getInstance();
+        $busy = $db->fetchOne("
+            SELECT id, task_type, status
+            FROM backup_jobs
+            WHERE agent_id = ?
+              AND status IN ('sent', 'running')
+            ORDER BY FIELD(status, 'running', 'sent')
+            LIMIT 1
+        ", [$agentId]);
+
+        if (!$busy) {
+            return null;
+        }
+
+        return sprintf(
+            'A %s job (#%d) is %s on this client. Wait for it to finish, or cancel it, then try again.',
+            str_replace('_', ' ', (string) $busy['task_type']),
+            (int) $busy['id'],
+            $busy['status'] === 'running' ? 'running' : 'about to run'
+        );
+    }
+
+    /**
+     * How to make the agent fetch its new SSH key. It does so on start-up,
+     * after testing the old one and finding it refused.
+     */
+    public static function restartAgentHint(array $agent): string
+    {
+        $platform = strtolower((string) ($agent['platform'] ?? ''));
+
+        if ($platform === 'windows') {
+            return 'Restart the BBS Agent service on the client: Restart-Service bbs-agent';
+        }
+
+        if ($platform === 'darwin') {
+            return 'Restart the agent on the client: sudo launchctl kickstart -k system/com.borgbackupserver.agent';
+        }
+
+        return "Restart the agent on the client: sudo systemctl restart bbs-agent\n"
+            . 'A containerised agent: restart the container.';
+    }
+
+    /**
+     * Where a client's SSH home goes when the database does not say. Same rule
+     * as ClientController::store(): storage_path, unless that is a storage
+     * location (repositories, possibly on a NAS), in which case /var/bbs/home.
+     */
+    private static function defaultHomeDir(int $agentId): string
+    {
+        $db = Database::getInstance();
+        $row = $db->fetchOne("SELECT `value` FROM settings WHERE `key` = 'storage_path'");
+        $storagePath = rtrim((string) ($row['value'] ?? ''), '/') ?: '/var/bbs/home';
+
+        $location = $db->fetchOne("SELECT id FROM storage_locations WHERE path = ?", [$storagePath]);
+        if ($location && is_dir('/var/bbs/home')) {
+            $storagePath = '/var/bbs/home';
+        }
+
+        return $storagePath . '/' . $agentId;
+    }
+
+    /**
      * Remove SSH access for a client.
      */
     public static function deprovisionClient(string $unixUser): void

@@ -2120,6 +2120,44 @@ class AdminApiController extends Controller
         ]);
     }
 
+    /**
+     * POST /api/v1/clients/{id}/reprovision-ssh
+     *
+     * The web's "Repair SSH access": a new SSH key pair, and the client's Unix
+     * user and authorized_keys rebuilt on the server, for borg connections
+     * that fail with "Permission denied (publickey)" (#537). Returns nothing
+     * secret — the agent fetches its new private key when it restarts.
+     * Admin token, like rotate-key.
+     */
+    public function reprovisionClientSsh(int $id): void
+    {
+        $this->requireApiToken();
+
+        $agent = $this->db->fetchOne("SELECT * FROM agents WHERE id = ?", [$id]);
+        if (!$agent) {
+            $this->json(['error' => 'Client not found'], 404);
+        }
+
+        $blocked = SshKeyManager::reprovisionBlockedReason($id);
+        if ($blocked !== null) {
+            $this->json(['error' => $blocked], 409);
+        }
+
+        $result = SshKeyManager::reprovisionClient($agent, 'API');
+        if (!$result) {
+            $this->json(['error' => 'SSH access repair failed: ' . (SshKeyManager::getLastHelperError() ?? 'unknown error')], 500);
+        }
+
+        $this->json([
+            'status' => 'ok',
+            'client_id' => (int) $agent['id'],
+            'ssh_unix_user' => $result['unix_user'],
+            'ssh_home_dir' => $result['home_dir'],
+            'previous_key_revoked' => true,
+            'restart_instructions' => SshKeyManager::restartAgentHint($agent),
+        ]);
+    }
+
     public function updateClient(int $id): void
     {
         $ctx = $this->requireApiAuth();

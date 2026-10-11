@@ -105,6 +105,7 @@ class App
         $this->router->map('POST', '/clients/[i:id]/edit', 'ClientController@update');
         $this->router->map('POST', '/clients/[i:id]/delete', 'ClientController@delete');
         $this->router->map('POST', '/clients/[i:id]/rotate-key', 'ClientController@rotateApiKey');
+        $this->router->map('POST', '/clients/[i:id]/reprovision-ssh', 'ClientController@reprovisionSsh');
         $this->router->map('POST', '/clients/[i:id]/update-borg', 'ClientController@updateBorg');
         $this->router->map('POST', '/clients/[i:id]/update-agent', 'ClientController@updateAgent');
         $this->router->map('POST', '/clients/[i:id]/browse', 'ClientController@browse');
@@ -389,6 +390,7 @@ class App
         $this->router->map('PUT',  '/api/v1/ssl/email', 'Api\\SslApiController@setEmail');
         $this->router->map('PUT',  '/api/v1/ssl/external', 'Api\\SslApiController@setExternal');
         $this->router->map('POST', '/api/v1/clients/[i:id]/rotate-key', 'Api\\AdminApiController@rotateClientKey');
+        $this->router->map('POST', '/api/v1/clients/[i:id]/reprovision-ssh', 'Api\\AdminApiController@reprovisionClientSsh');
         $this->router->map('POST', '/api/v1/repositories/[i:repoId]/passphrase', 'Api\\AdminApiController@changeRepositoryPassphrase');
         $this->router->map('GET', '/api/v1/storage', 'Api\\AdminApiController@listStorageLocations');
         $this->router->map('POST', '/api/v1/storage', 'Api\\AdminApiController@createStorageLocation');

@@ -4195,6 +4195,18 @@ GRANT ALL PRIVILEGES ON DATABASE mydb TO <span id="pgUser2g">bbs_backup</span>;<
                         </button>
                     </div>
                     <div id="rotateKeyResult" class="alert alert-warning mt-3 d-none"></div>
+
+                    <hr class="my-3">
+                    <div class="d-flex justify-content-between align-items-start gap-3">
+                        <div class="small text-muted">
+                            <strong class="text-body">Repair this client's SSH access</strong>
+                            <div>For backups that fail with "Permission denied (publickey)". Issues a new SSH key pair and rebuilds this client's user and authorized_keys on the server. Plans, repositories and the catalogue are untouched. The agent fetches the new key when it is restarted, so restart it afterwards. Replacing the API key above does not fix this error.</div>
+                        </div>
+                        <button type="button" class="btn btn-sm btn-outline-danger flex-shrink-0" id="reprovisionSshBtn">
+                            <i class="bi bi-key me-1"></i>Repair SSH access
+                        </button>
+                    </div>
+                    <div id="reprovisionSshResult" class="alert alert-warning mt-3 d-none"></div>
                 </div>
             </div>
         </div>
@@ -5043,6 +5055,57 @@ const csrfToken = '<?= $this->csrfToken() ?>';
             box.classList.remove('d-none', 'alert-warning');
             box.classList.add('alert-danger');
             box.textContent = 'Could not replace the key: ' + e.message;
+        } finally {
+            btn.disabled = false;
+            btn.innerHTML = label;
+        }
+    });
+})();
+</script>
+
+<script>
+// Repair the client's SSH access. Nothing secret comes back: the agent
+// fetches its new private key over the API when it restarts.
+(function () {
+    const btn = document.getElementById('reprovisionSshBtn');
+    if (!btn) return;
+    const box = document.getElementById('reprovisionSshResult');
+
+    btn.addEventListener('click', async function () {
+        if (!confirm('Repair this client\'s SSH access?\n\nA new SSH key pair is issued and the current one stops working. Backups from this client fail until the agent is restarted and has fetched the new key.')) return;
+
+        btn.disabled = true;
+        const label = btn.innerHTML;
+        btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Repairing…';
+        try {
+            const r = await fetch('/clients/<?= (int) $agent['id'] ?>/reprovision-ssh', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken },
+                credentials: 'same-origin',
+                body: '{}',
+            });
+            const d = await r.json();
+            if (!r.ok || d.error) throw new Error(d.error || ('HTTP ' + r.status));
+
+            box.classList.remove('d-none', 'alert-danger');
+            box.classList.add('alert-warning');
+            box.textContent = '';
+            const title = document.createElement('div');
+            title.className = 'fw-semibold mb-1';
+            title.textContent = 'SSH access repaired';
+            const detail = document.createElement('div');
+            detail.className = 'small mb-1';
+            detail.textContent = 'Server user ' + d.ssh_unix_user + ', home ' + d.ssh_home_dir + '. The previous SSH key no longer works.';
+            const steps = document.createElement('pre');
+            steps.className = 'small mb-0 mt-2';
+            steps.style.whiteSpace = 'pre-wrap';
+            steps.textContent = d.restart_instructions;
+            box.append(title, detail, steps);
+            box.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        } catch (e) {
+            box.classList.remove('d-none', 'alert-warning');
+            box.classList.add('alert-danger');
+            box.textContent = 'Could not repair SSH access: ' + e.message;
         } finally {
             btn.disabled = false;
             btn.innerHTML = label;

@@ -4,6 +4,7 @@
 #
 # Usage:
 #   bbs-ssh-helper create-user <username> <home_dir> <public_key>
+#   bbs-ssh-helper rekey-user <username> <home_dir> <public_key>
 #   bbs-ssh-helper create-repo-dir <repo_dir>
 #   bbs-ssh-helper borg-init <repo_path> <encryption> [passphrase]
 #   bbs-ssh-helper borg-passphrase <username> <repo_path>   (old/new on stdin)
@@ -90,6 +91,54 @@ is_client_home() {
     is_safe_storage_root "$(dirname "$P")" || [[ "$(dirname "$P")" =~ ^/var/bbs(/|$) ]]
 }
 
+# One public key on one line: type, base64 body, optional comment. The key
+# goes into authorized_keys after a command="..." restriction, so a value
+# with a newline would add a second, unrestricted line and give the client a
+# shell on the server; a quote could end the restriction early.
+is_public_key() {
+    local K="${1:-}"
+    [[ "$K" == *$'\n'* || "$K" == *$'\r'* ]] && return 1
+    [[ "$K" =~ ^(ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp(256|384|521))\ [A-Za-z0-9+/]+=?=?=?(\ [A-Za-z0-9._@+-]+)?$ ]]
+}
+
+# Point a client's Unix user at its home folder and install its public key,
+# restricted to bbs-ssh-gate. Shared by create-user (new client) and
+# rekey-user (new key for an existing client). The user must exist.
+write_client_ssh_access() {
+    local USERNAME="$1" HOME_DIR="$2" PUBLIC_KEY="$3"
+
+    # Set ownership: user owns, www-data group for server-side borg operations (init, prune, compact)
+    # This MUST succeed — sshd requires correct ownership of home/.ssh for key auth.
+    # If this fails (e.g. NAS/NFS mount), the SSH home dir must be on a local filesystem.
+    if ! chown "$USERNAME":www-data "$HOME_DIR" 2>&1; then
+        echo "Error: chown failed on $HOME_DIR — SSH home directories must be on a local filesystem, not a NAS/NFS mount. Check your storage_path setting."
+        exit 1
+    fi
+    chmod 750 "$HOME_DIR"
+
+    # Add user to www-data group so catalog files can be chgrp'd to www-data
+    # (needed on FUSE/shfs filesystems like Unraid where setgid is not honored)
+    usermod -a -G www-data "$USERNAME" 2>/dev/null || true
+
+    # Configure SSH authorized_keys with gate dispatcher
+    local SSH_DIR="$HOME_DIR/.ssh"
+    mkdir -p "$SSH_DIR"
+    chmod 700 "$SSH_DIR"
+
+    local AUTHORIZED_KEYS="$SSH_DIR/authorized_keys"
+    local RESTRICT_CMD="command=\"/usr/local/bin/bbs-ssh-gate $HOME_DIR\",restrict"
+
+    echo "$RESTRICT_CMD $PUBLIC_KEY" > "$AUTHORIZED_KEYS"
+    chmod 600 "$AUTHORIZED_KEYS"
+    chown -R "$USERNAME":"$USERNAME" "$SSH_DIR"
+
+    # Create catalog log directory with setgid so files inherit www-data group
+    local CATALOG_DIR="$HOME_DIR/.catalog-logs"
+    mkdir -p "$CATALOG_DIR"
+    chown "$USERNAME":www-data "$CATALOG_DIR"
+    chmod 2770 "$CATALOG_DIR"
+}
+
 case "$ACTION" in
     create-user)
         USERNAME="${2:-}"
@@ -112,6 +161,11 @@ case "$ACTION" in
             exit 1
         fi
 
+        if ! is_public_key "$PUBLIC_KEY"; then
+            echo "Error: public key must be one line: <type> <base64> [comment]"
+            exit 1
+        fi
+
         # Create home directory if needed
         mkdir -p "$HOME_DIR"
 
@@ -123,36 +177,65 @@ case "$ACTION" in
             echo "Created user: $USERNAME"
         fi
 
-        # Set ownership: user owns, www-data group for server-side borg operations (init, prune, compact)
-        # This MUST succeed — sshd requires correct ownership of home/.ssh for key auth.
-        # If this fails (e.g. NAS/NFS mount), the SSH home dir must be on a local filesystem.
-        if ! chown "$USERNAME":www-data "$HOME_DIR" 2>&1; then
-            echo "Error: chown failed on $HOME_DIR — SSH home directories must be on a local filesystem, not a NAS/NFS mount. Check your storage_path setting."
+        write_client_ssh_access "$USERNAME" "$HOME_DIR" "$PUBLIC_KEY"
+
+        echo "OK"
+        ;;
+
+    rekey-user)
+        # Give an existing client a new SSH key: rewrite authorized_keys,
+        # recreate the Unix user if it is gone, and point it at the home
+        # folder the database records. For a client whose server-side SSH
+        # access broke (#537); the agent fetches the matching private key
+        # from the server when it restarts.
+        USERNAME="${2:-}"
+        HOME_DIR="${3:-}"
+        PUBLIC_KEY="${4:-}"
+
+        if [ -z "$USERNAME" ] || [ -z "$HOME_DIR" ] || [ -z "$PUBLIC_KEY" ]; then
+            echo "Usage: bbs-ssh-helper rekey-user <username> <home_dir> <public_key>"
             exit 1
         fi
-        chmod 750 "$HOME_DIR"
 
-        # Add user to www-data group so catalog files can be chgrp'd to www-data
-        # (needed on FUSE/shfs filesystems like Unraid where setgid is not honored)
-        usermod -a -G www-data "$USERNAME" 2>/dev/null || true
+        if [[ ! "$USERNAME" =~ ^bbs-[a-z0-9_-]+$ ]]; then
+            echo "Error: username must match bbs-[a-z0-9_-]+"
+            exit 1
+        fi
 
-        # Configure SSH authorized_keys with gate dispatcher
-        SSH_DIR="$HOME_DIR/.ssh"
-        mkdir -p "$SSH_DIR"
-        chmod 700 "$SSH_DIR"
+        if ! is_client_home "$HOME_DIR"; then
+            echo "Error: home dir must be <storage path>/<client id>, not a symlink or system directory"
+            exit 1
+        fi
 
-        AUTHORIZED_KEYS="$SSH_DIR/authorized_keys"
-        RESTRICT_CMD="command=\"/usr/local/bin/bbs-ssh-gate $HOME_DIR\",restrict"
+        if ! is_public_key "$PUBLIC_KEY"; then
+            echo "Error: public key must be one line: <type> <base64> [comment]"
+            exit 1
+        fi
 
-        echo "$RESTRICT_CMD $PUBLIC_KEY" > "$AUTHORIZED_KEYS"
-        chmod 600 "$AUTHORIZED_KEYS"
-        chown -R "$USERNAME":"$USERNAME" "$SSH_DIR"
+        mkdir -p "$HOME_DIR"
 
-        # Create catalog log directory with setgid so files inherit www-data group
-        CATALOG_DIR="$HOME_DIR/.catalog-logs"
-        mkdir -p "$CATALOG_DIR"
-        chown "$USERNAME":www-data "$CATALOG_DIR"
-        chmod 2770 "$CATALOG_DIR"
+        if id "$USERNAME" &>/dev/null; then
+            # The account may point at a folder other than the one the
+            # database records (an update moved it, #532). Follow the
+            # database — but only within the same client: the folder name
+            # is the client id, and a user must not be moved onto another
+            # client's folder, which would hand this key that client's repos.
+            CUR_HOME=$(getent passwd "$USERNAME" | cut -d: -f6)
+            if [ "$CUR_HOME" != "$HOME_DIR" ]; then
+                if [ "$(basename "$CUR_HOME")" != "$(basename "$HOME_DIR")" ]; then
+                    echo "Error: $USERNAME belongs to client folder $CUR_HOME, not $HOME_DIR"
+                    exit 1
+                fi
+                usermod -d "$HOME_DIR" "$USERNAME"
+                echo "Moved $USERNAME home from $CUR_HOME to $HOME_DIR"
+            fi
+            echo "Replaced key for $USERNAME"
+        else
+            useradd --shell /bin/sh --home-dir "$HOME_DIR" --no-create-home "$USERNAME"
+            echo "Recreated user: $USERNAME"
+        fi
+
+        write_client_ssh_access "$USERNAME" "$HOME_DIR" "$PUBLIC_KEY"
 
         echo "OK"
         ;;

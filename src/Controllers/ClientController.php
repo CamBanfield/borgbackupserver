@@ -1741,6 +1741,46 @@ class ClientController extends Controller
         ]);
     }
 
+    /**
+     * POST /clients/{id}/reprovision-ssh
+     *
+     * New SSH key pair, Unix user and authorized_keys on this server, for a
+     * client whose borg connections fail with "Permission denied (publickey)"
+     * (#537). The private key is not returned: the agent fetches it over the
+     * API when it restarts. Same rule as rotate-key: admins, or the owner.
+     */
+    public function reprovisionSsh(int $id): void
+    {
+        $this->requireAuth();
+        $this->verifyCsrf();
+
+        $agent = $this->getAgent($id);
+        if (!$agent) {
+            $this->json(['error' => 'Client not found'], 404);
+        }
+
+        if (!$this->isOwnerOrAdmin($agent)) {
+            $this->json(['error' => "Only an admin or the client's owner can repair its SSH access."], 403);
+        }
+
+        $blocked = SshKeyManager::reprovisionBlockedReason($id);
+        if ($blocked !== null) {
+            $this->json(['error' => $blocked], 409);
+        }
+
+        $result = SshKeyManager::reprovisionClient($agent, $_SESSION['username'] ?? null);
+        if (!$result) {
+            $this->json(['error' => 'SSH access repair failed: ' . (SshKeyManager::getLastHelperError() ?? 'unknown error')], 500);
+        }
+
+        $this->json([
+            'status' => 'ok',
+            'ssh_unix_user' => $result['unix_user'],
+            'ssh_home_dir' => $result['home_dir'],
+            'restart_instructions' => SshKeyManager::restartAgentHint($agent),
+        ]);
+    }
+
     public function updateBorg(int $id): void
     {
         $this->requireAuth();
