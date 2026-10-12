@@ -237,7 +237,7 @@ $sslEnabled = str_starts_with(\BBS\Core\Config::get('APP_URL', 'https://'), 'htt
                     <span class="badge bg-warning text-dark ms-1"><i class="bi bi-exclamation-triangle-fill me-1"></i>Active</span>
                 <?php endif; ?>
             </div>
-            <p class="settings-row-help">Pauses all new backup jobs. Jobs already running finish normally.</p>
+            <p class="settings-row-help">Pauses the job queue. Nothing new starts, including server-side jobs such as prune and offsite sync. Jobs already running finish normally.</p>
         </div>
         <div class="settings-row-control">
             <div class="form-check form-switch mb-0">
@@ -2944,7 +2944,7 @@ if ($metricsProxies === []) {
                 <tr><td><span class="badge bg-success">GET</span></td><td><code>/api/v1/schedules</code></td><td>Flat list of every plan with its schedule, next_run, last_run, last_status, and last_completed_at across all clients</td></tr>
                 <tr><td colspan="3" class="text-muted small fw-semibold pt-2">Maintenance</td></tr>
                 <tr><td><span class="badge bg-success">GET</span></td><td><code>/api/v1/maintenance</code></td><td>Read the maintenance-mode flag</td></tr>
-                <tr><td><span class="badge bg-primary">POST</span></td><td><code>/api/v1/maintenance</code></td><td>Toggle maintenance mode: <code>{"enabled": true|false}</code> (pauses agent dispatch)</td></tr>
+                <tr><td><span class="badge bg-primary">POST</span></td><td><code>/api/v1/maintenance</code></td><td>Toggle maintenance mode: <code>{"enabled": true|false}</code> (pauses the job queue; running jobs finish)</td></tr>
             </tbody>
         </table>
 

@@ -223,6 +223,10 @@ class S3SyncService
             'message' => "Offsite sync to \"{$dest['name']}\" queued by request (job #{$jobId})",
         ]);
         $note = $active ? "It runs after the " . \BBS\Core\JobType::label($active['task_type']) . " job #{$active['id']} that is on this repository now, so the copy is taken from a settled repository." : null;
+        $maintenance = $this->db->fetchOne("SELECT `value` FROM settings WHERE `key` = 'maintenance_mode'");
+        if (($maintenance['value'] ?? '0') === '1') {
+            $note = trim(($note ?? '') . ' Maintenance mode is on, so it waits until that is turned off.');
+        }
         return ['ok' => true, 'code' => 202, 'error' => null, 'job_id' => $jobId, 'note' => $note];
     }
 

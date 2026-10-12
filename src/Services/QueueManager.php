@@ -101,9 +101,14 @@ class QueueManager
 
     private function promoteQueuedJobs(): array
     {
-        // Check maintenance mode — still process server-side jobs (catalog, prune, etc.)
+        // Maintenance mode pauses the whole queue. Nothing is promoted, server-side
+        // jobs included: an offsite sync or a prune started during a server
+        // restore or an upgrade is as unwelcome as a backup. Jobs already
+        // sent or running are left to finish, and queued ones wait.
         $maintenance = $this->db->fetchOne("SELECT `value` FROM settings WHERE `key` = 'maintenance_mode'");
-        $maintenanceMode = (($maintenance['value'] ?? '0') === '1');
+        if (($maintenance['value'] ?? '0') === '1') {
+            return [];
+        }
 
         // Count currently active backup/restore jobs (sent + running) for ONLINE agents.
         // Excludes: server-side tasks (run by scheduler), management tasks (update_borg,
@@ -176,7 +181,6 @@ class QueueManager
         $promoted = [];
         $promotedCount = 0;
 
-        $serverSideTypes = self::SERVER_SIDE_TYPES;
         $managementTypes = ['update_borg', 'update_agent'];
 
         // Offsite syncs are capped on their own, independently of max_queue.
@@ -234,11 +238,6 @@ class QueueManager
                 // Otherwise fall through to promote immediately
             } elseif ($promotedCount >= $slotsAvailable) {
                 break;
-            }
-
-            // In maintenance mode, only promote server-side jobs (not backups/restores)
-            if ($maintenanceMode && !in_array($job['task_type'], $serverSideTypes) && !$isManagement) {
-                continue;
             }
 
             // Don't promote agent-bound jobs (backup, restore, plugin_test, etc.)

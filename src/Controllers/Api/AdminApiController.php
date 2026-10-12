@@ -3364,7 +3364,7 @@ class AdminApiController extends Controller
      * POST /api/v1/maintenance
      * Toggle maintenance mode. Body: {"enabled": true|false}.
      * When enabled, the scheduler stops creating new jobs and the queue
-     * skips agent dispatch (server-side promotions still run).
+     * promotes nothing, server-side jobs included. Running jobs finish.
      */
     public function setMaintenance(): void
     {
