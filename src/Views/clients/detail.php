@@ -3207,6 +3207,10 @@ $sizeDisplay = $totalSize > 0 ? \BBS\Services\ServerStats::formatBytes((int) $to
                                 <label class="form-label small fw-semibold mb-1">Dump Directory</label>
                                 <input type="text" class="form-control form-control-sm" name="plugin_config[dump_dir]" value="<?= htmlspecialchars($ev['dump_dir'] ?? '') ?>">
                             </div>
+                            <div class="mb-2">
+                                <div class="form-check"><input class="form-check-input" type="checkbox" name="plugin_config[stream_to_borg]" value="1" id="editCfg<?= $cfg['id'] ?>_stream" <?= !empty($ev['stream_to_borg']) ? 'checked' : '' ?>><label class="form-check-label small" for="editCfg<?= $cfg['id'] ?>_stream">Stream dumps to Borg</label></div>
+                                <div class="form-text small">Avoid storing a full local dump during backup. Existing configurations stay in file mode until enabled.</div>
+                            </div>
                             <div class="row g-2 mb-2">
                                 <div class="col-auto"><div class="form-check"><input class="form-check-input" type="checkbox" name="plugin_config[compress]" value="1" id="editCfg<?= $cfg['id'] ?>_compress" <?= ($ev['compress'] ?? true) ? 'checked' : '' ?>><label class="form-check-label small" for="editCfg<?= $cfg['id'] ?>_compress">Compress</label></div></div>
                                 <div class="col-auto"><div class="form-check"><input class="form-check-input" type="checkbox" name="plugin_config[cleanup_after]" value="1" id="editCfg<?= $cfg['id'] ?>_cleanup" <?= ($ev['cleanup_after'] ?? true) ? 'checked' : '' ?>><label class="form-check-label small" for="editCfg<?= $cfg['id'] ?>_cleanup">Cleanup after backup</label></div></div>
@@ -3310,7 +3314,7 @@ $sizeDisplay = $totalSize > 0 ? \BBS\Services\ServerStats::formatBytes((int) $to
                             </div>
                         <?php else: ?>
                             <?php foreach ($schema as $field => $def):
-                                $val = $cfgData[$field] ?? $def['default'] ?? '';
+                                $val = $cfgData[$field] ?? ($field === 'stream_to_borg' ? false : ($def['default'] ?? ''));
                                 if (is_array($val)) $val = implode(', ', $val);
                                 $showWhen = $def['show_when'] ?? null;
                                 $showWhenAttr = '';
@@ -3387,6 +3391,7 @@ $sizeDisplay = $totalSize > 0 ? \BBS\Services\ServerStats::formatBytes((int) $to
                                         <div class="col-6"><label class="form-label small fw-semibold mb-1">Exclude DBs</label><input type="text" class="form-control form-control-sm" name="plugin_config[exclude_databases]" value="<?= $plugin['slug'] === 'pg_dump' ? 'template0, template1, postgres' : 'information_schema, performance_schema, sys' ?>"><div class="form-text small">Comma-separated</div></div>
                                     </div>
                                     <div class="mb-2"><label class="form-label small fw-semibold mb-1">Dump Directory</label><input type="text" class="form-control form-control-sm" name="plugin_config[dump_dir]" value="<?= $plugin['slug'] === 'pg_dump' ? '/home/bbs/pgdump' : '/home/bbs/mysql' ?>"></div>
+                                    <div class="mb-2"><div class="form-check"><input class="form-check-input" type="checkbox" name="plugin_config[stream_to_borg]" value="1" id="newCfg<?= $plugin['id'] ?>_stream" checked><label class="form-check-label small" for="newCfg<?= $plugin['id'] ?>_stream">Stream dumps to Borg</label></div><div class="form-text small">Avoid storing a full local dump during backup.</div></div>
                                     <div class="row g-2 mb-2">
                                         <div class="col-auto"><div class="form-check"><input class="form-check-input" type="checkbox" name="plugin_config[compress]" value="1" id="newCfg<?= $plugin['id'] ?>_compress" checked><label class="form-check-label small" for="newCfg<?= $plugin['id'] ?>_compress">Compress</label></div></div>
                                         <div class="col-auto"><div class="form-check"><input class="form-check-input" type="checkbox" name="plugin_config[cleanup_after]" value="1" id="newCfg<?= $plugin['id'] ?>_cleanup" checked><label class="form-check-label small" for="newCfg<?= $plugin['id'] ?>_cleanup">Cleanup after backup</label></div></div>

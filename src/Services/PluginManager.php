@@ -266,6 +266,16 @@ class PluginManager
         // encrypt, an empty one means keep the stored (encrypted) value.
         $existingConfig = json_decode($existing['config'], true) ?: [];
         $schema = $this->getPluginSchema($existing['slug']);
+        if (in_array($existing['slug'], ['mysql_dump', 'pg_dump', 'mongo_dump'], true)) {
+            // Older database configs can contain options (notably MySQL's
+            // per_database) that the current form does not render. Keep them
+            // when enabling streaming on an existing connector.
+            foreach ($existingConfig as $field => $value) {
+                if (!array_key_exists($field, $schema) && !array_key_exists($field, $config)) {
+                    $config[$field] = $value;
+                }
+            }
+        }
         foreach ($schema as $field => $def) {
             if (empty($def['sensitive'])) {
                 continue;
@@ -554,6 +564,12 @@ class PluginManager
     {
         $schemas = [
             'mysql_dump' => [
+                'stream_to_borg' => [
+                    'type' => 'checkbox',
+                    'label' => 'Stream dumps to Borg',
+                    'default' => true,
+                    'help' => 'New connections stream without storing a full local dump. Existing connections keep their saved behavior until enabled.',
+                ],
                 'host' => [
                     'type' => 'text',
                     'label' => 'MySQL Host',
@@ -613,6 +629,12 @@ class PluginManager
                 ],
             ],
             'pg_dump' => [
+                'stream_to_borg' => [
+                    'type' => 'checkbox',
+                    'label' => 'Stream dumps to Borg',
+                    'default' => true,
+                    'help' => 'New connections stream without storing a full local dump. Existing connections keep their saved behavior until enabled.',
+                ],
                 'host' => [
                     'type' => 'text',
                     'label' => 'PostgreSQL Host',
@@ -672,6 +694,12 @@ class PluginManager
                 ],
             ],
             'mongo_dump' => [
+                'stream_to_borg' => [
+                    'type' => 'checkbox',
+                    'label' => 'Stream dumps to Borg',
+                    'default' => true,
+                    'help' => 'New connections stream a mongodump archive without storing a full local dump. Existing connections keep their saved behavior until enabled.',
+                ],
                 'host' => [
                     'type' => 'text',
                     'label' => 'MongoDB Host',

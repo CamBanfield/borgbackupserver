@@ -155,7 +155,7 @@ class QueueManager
                    rsc.ssh_private_key_encrypted as remote_ssh_key_encrypted,
                    rsc.borg_remote_path,
                    a.name as agent_name,
-                   a.status as agent_status
+                   a.status as agent_status, a.agent_version
             FROM backup_jobs bj
             LEFT JOIN backup_plans bp ON bp.id = bj.backup_plan_id
             LEFT JOIN repositories r ON r.id = bj.repository_id
@@ -330,7 +330,9 @@ class QueueManager
                     $pluginManager = new PluginManager();
                     $plugins = $pluginManager->buildPluginPayload($job['backup_plan_id'], $job['agent_id']);
                     foreach ($plugins as $p) {
-                        if (!empty($p['config']['dump_dir'])) {
+                        if ((empty($p['config']['stream_to_borg'])
+                            || version_compare((string) ($job['agent_version'] ?? '0'), '2.98.11', '<'))
+                            && !empty($p['config']['dump_dir'])) {
                             $dumpDir = rtrim($p['config']['dump_dir'], '/');
                             if (strpos($plan['directories'], $dumpDir) === false) {
                                 $plan['directories'] .= "\n" . $dumpDir;
@@ -558,7 +560,7 @@ class QueueManager
                    r.storage_type, r.remote_ssh_config_id,
                    rsc.remote_port, rsc.ssh_private_key_encrypted as remote_ssh_key_encrypted,
                    rsc.borg_remote_path,
-                   a.name as agent_name
+                   a.name as agent_name, a.agent_version
             FROM backup_jobs bj
             LEFT JOIN backup_plans bp ON bp.id = bj.backup_plan_id
             LEFT JOIN repositories r ON r.id = bj.repository_id
@@ -602,7 +604,9 @@ class QueueManager
                     $pluginManager = new PluginManager();
                     $plugins = $pluginManager->buildPluginPayload($job['backup_plan_id'], $job['agent_id']);
                     foreach ($plugins as $p) {
-                        if (!empty($p['config']['dump_dir'])) {
+                        if ((empty($p['config']['stream_to_borg'])
+                            || version_compare((string) ($job['agent_version'] ?? '0'), '2.98.11', '<'))
+                            && !empty($p['config']['dump_dir'])) {
                             $dumpDir = rtrim($p['config']['dump_dir'], '/');
                             if (strpos($plan['directories'], $dumpDir) === false) {
                                 $plan['directories'] .= "\n" . $dumpDir;
@@ -884,7 +888,10 @@ class QueueManager
 
         if (!$archive) return null;
 
-        $dbInfo = json_decode($archive['databases_backed_up'] ?? '{}', true) ?: [];
+        $dbInfo = ArchiveDatabaseService::restoreGroup(
+            json_decode($archive['databases_backed_up'] ?? '{}', true) ?: [],
+            (int) ($job['plugin_config_id'] ?? 0), 'mysql_dump');
+        if (!$dbInfo) return null;
         $databases = json_decode($job['restore_databases'] ?? '[]', true) ?: [];
         $perDatabase = $dbInfo['per_database'] ?? true;
         $compress = $dbInfo['compress'] ?? true;
@@ -918,10 +925,10 @@ class QueueManager
 
         // Trust the selected config for how its dump was written — a v2 archive
         // (multiple DB configs) has no single top-level compress/per_database (#382).
-        if (isset($mysqlConfig['compress']))     $compress = (bool) $mysqlConfig['compress'];
-        if (isset($mysqlConfig['per_database'])) $perDatabase = (bool) $mysqlConfig['per_database'];
+        $compress = (bool) ($dbInfo['compress'] ?? $mysqlConfig['compress'] ?? true);
+        $perDatabase = (bool) ($dbInfo['per_database'] ?? $mysqlConfig['per_database'] ?? true);
 
-        $dumpDir = $mysqlConfig['dump_dir'] ?? '/home/bbs/mysql';
+        $dumpDir = $dbInfo['dump_dir'] ?? $mysqlConfig['dump_dir'] ?? '/home/bbs/mysql';
 
         // Build borg extract command: extract only the specific dump file(s) needed
         $repo = ['path' => $archive['repo_path'], 'passphrase_encrypted' => $archive['passphrase_encrypted']];
@@ -932,8 +939,10 @@ class QueueManager
                 $dbName = $db['database'] ?? '';
                 if (empty($dbName)) continue;
                 $ext = $compress ? '.sql.gz' : '.sql';
-                $extractPaths[] = $basePath . '/' . $dbName . $ext;
+                $extractPaths[] = $dbInfo['paths'][$dbName] ?? ($basePath . '/' . $dbName . $ext);
             }
+        } elseif (!empty($dbInfo['paths'])) {
+            $extractPaths = array_values(array_unique($dbInfo['paths']));
         }
         // Fallback to full directory if non-per-database or no specific DBs
         if (empty($extractPaths)) {
@@ -1005,7 +1014,10 @@ class QueueManager
 
         if (!$archive) return null;
 
-        $dbInfo = json_decode($archive['databases_backed_up'] ?? '{}', true) ?: [];
+        $dbInfo = ArchiveDatabaseService::restoreGroup(
+            json_decode($archive['databases_backed_up'] ?? '{}', true) ?: [],
+            (int) ($job['plugin_config_id'] ?? 0), 'pg_dump');
+        if (!$dbInfo) return null;
         $databases = json_decode($job['restore_databases'] ?? '[]', true) ?: [];
         $compress = $dbInfo['compress'] ?? true;
 
@@ -1036,21 +1048,21 @@ class QueueManager
 
         if (!$pgConfig) return null;
 
-        if (isset($pgConfig['compress'])) $compress = (bool) $pgConfig['compress'];
+        $compress = (bool) ($dbInfo['compress'] ?? $pgConfig['compress'] ?? true);
 
-        $dumpDir = $pgConfig['dump_dir'] ?? '/home/bbs/pgdump';
+        $dumpDir = $dbInfo['dump_dir'] ?? $pgConfig['dump_dir'] ?? '/home/bbs/pgdump';
 
         // Build borg extract command targeting only the specific dump file(s) needed
         $repo = ['path' => $archive['repo_path'], 'passphrase_encrypted' => $archive['passphrase_encrypted']];
         $extractPaths = [];
         $basePath = ltrim($dumpDir, '/');
-        $perDatabase = $pgConfig['per_database'] ?? ($dbInfo['per_database'] ?? true);
+        $perDatabase = $dbInfo['per_database'] ?? ($pgConfig['per_database'] ?? true);
         if ($perDatabase && !empty($databases)) {
             foreach ($databases as $db) {
                 $dbName = $db['database'] ?? '';
                 if (empty($dbName)) continue;
                 $ext = $compress ? '.sql.gz' : '.sql';
-                $extractPaths[] = $basePath . '/' . $dbName . $ext;
+                $extractPaths[] = $dbInfo['paths'][$dbName] ?? ($basePath . '/' . $dbName . $ext);
             }
         }
         if (empty($extractPaths)) {
@@ -1121,7 +1133,10 @@ class QueueManager
 
         if (!$archive) return null;
 
-        $dbInfo = json_decode($archive['databases_backed_up'] ?? '{}', true) ?: [];
+        $dbInfo = ArchiveDatabaseService::restoreGroup(
+            json_decode($archive['databases_backed_up'] ?? '{}', true) ?: [],
+            (int) ($job['plugin_config_id'] ?? 0), 'mongo_dump');
+        if (!$dbInfo) return null;
         $databases = json_decode($job['restore_databases'] ?? '[]', true) ?: [];
         $compress = $dbInfo['compress'] ?? true;
 
@@ -1152,9 +1167,9 @@ class QueueManager
 
         if (!$mongoConfig) return null;
 
-        if (isset($mongoConfig['compress'])) $compress = (bool) $mongoConfig['compress'];
+        $compress = (bool) ($dbInfo['compress'] ?? $mongoConfig['compress'] ?? true);
 
-        $dumpDir = $mongoConfig['dump_dir'] ?? '/home/bbs/mongodump';
+        $dumpDir = $dbInfo['dump_dir'] ?? $mongoConfig['dump_dir'] ?? '/home/bbs/mongodump';
 
         // Build borg extract command targeting only the specific database directories needed
         // mongodump creates dump_dir/db_name/ directories
@@ -1165,7 +1180,7 @@ class QueueManager
             foreach ($databases as $db) {
                 $dbName = $db['database'] ?? '';
                 if (empty($dbName)) continue;
-                $extractPaths[] = $basePath . '/' . $dbName;
+                $extractPaths[] = $dbInfo['paths'][$dbName] ?? ($basePath . '/' . $dbName);
             }
         }
         if (empty($extractPaths)) {
@@ -1200,6 +1215,7 @@ class QueueManager
                 'auth_db' => $mongoConfig['auth_db'] ?? 'admin',
                 'dump_dir' => $dumpDir,
                 'compress' => $compress,
+                'format' => $dbInfo['format'] ?? 'mongo_directory',
             ],
         ];
 

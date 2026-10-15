@@ -25,6 +25,21 @@ class ArchiveDatabaseService
         $this->db = Database::getInstance();
     }
 
+    /** Select the archive's recorded connector settings for a restore job. */
+    public static function restoreGroup(array $metadata, int $configId, string $engine): array
+    {
+        if (empty($metadata['groups'])) {
+            return $metadata; // Legacy single-group archives.
+        }
+        foreach ($metadata['groups'] as $group) {
+            if ((int) ($group['config_id'] ?? 0) === $configId
+                && ($group['engine'] ?? null) === $engine) {
+                return $group;
+            }
+        }
+        return [];
+    }
+
     /**
      * Normalised dump groups for one archive, or an empty array when it holds
      * no database dumps.
@@ -74,7 +89,9 @@ class ArchiveDatabaseService
             $compress = $g['compress'] ?? true;
             $patterns = [];
             foreach ($dbs as $db) {
-                $patterns[] = $dumpDir . '/' . $db . ($compress ? '.sql.gz' : '.sql');
+                $patterns[] = isset($g['paths'][$db])
+                    ? '/' . ltrim($g['paths'][$db], '/')
+                    : $dumpDir . '/' . $db . ($compress ? '.sql.gz' : '.sql');
             }
             try {
                 $ch = \BBS\Core\ClickHouse::getInstance();
@@ -85,8 +102,16 @@ class ArchiveDatabaseService
                     WHERE agent_id = {$id} AND archive_id = {$archiveId} AND path IN ({$pathList})
                 ");
                 foreach ($rows as $row) {
-                    $dbName = preg_replace('/\\.sql(\\.gz)?$/', '', basename($row['path']));
-                    $g['mtimes'][$dbName] = $row['mtime'] ?: null;
+                    if (!empty($g['paths'])) {
+                        foreach ($g['paths'] as $dbName => $recordedPath) {
+                            if ('/' . ltrim($recordedPath, '/') === $row['path']) {
+                                $g['mtimes'][$dbName] = $row['mtime'] ?: null;
+                            }
+                        }
+                    } else {
+                        $dbName = preg_replace('/\\.sql(\\.gz)?$/', '', basename($row['path']));
+                        $g['mtimes'][$dbName] = $row['mtime'] ?: null;
+                    }
                 }
             } catch (\Exception $e) { /* catalog unavailable — mtimes optional */ }
         }
@@ -141,7 +166,16 @@ class ArchiveDatabaseService
                 || str_contains($name, "\0") || in_array($name, ['.', '..'], true) || !in_array($name, $available, true)) {
                 throw new \InvalidArgumentException('A selected database is not in this archive.');
             }
-            if ($engine === 'mongo_dump') {
+            if (isset($group['paths'][$name])) {
+                $recorded = $group['paths'][$name];
+                if (!is_string($recorded) || $recorded === '' || str_starts_with($recorded, '/')
+                    || str_contains($recorded, '\\') || preg_match('~(^|/)\.\.?(?:/|$)~', $recorded)
+                    || preg_match('/[\x00-\x1f]/', $recorded)
+                    || !str_starts_with($recorded, $basePath . '/')) {
+                    throw new \InvalidArgumentException('The recorded database dump path is invalid.');
+                }
+                $paths[] = $recorded;
+            } elseif ($engine === 'mongo_dump') {
                 $paths[] = $basePath . '/' . $name;
             } elseif (empty($group['per_database'])) {
                 $paths[] = $basePath . '/all_databases.sql' . (!empty($group['compress']) ? '.gz' : '');
