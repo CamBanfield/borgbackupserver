@@ -336,17 +336,34 @@ class SshKeyManager
 
         $updated = 0;
         foreach ($repos as $repo) {
-            $newPath = preg_replace_callback(
-                '/^(ssh:\/\/[^@\/]+@)[^\/]+/',
-                fn($m) => $m[1] . $host,
-                $repo['path']
-            );
+            $newPath = self::replaceRepoPathHost($repo['path'], $host);
             if ($newPath !== null && $newPath !== $repo['path']) {
                 $db->update('repositories', ['path' => $newPath], 'id = ?', [$repo['id']]);
                 $updated++;
             }
         }
         return $updated;
+    }
+
+    /**
+     * Swap the host in a local ssh:// repo path. Everything between the user's
+     * "@" and the repo path is treated as the host, where the repo path starts
+     * at "/./" (relative form) or "///" (absolute form: "//" plus an absolute
+     * storage path). Before 2.98.x a server host with a scheme such as
+     * "https://example.com" was accepted, and the next host change left
+     * "//example.com" stuck in every path (#513). Replacing the whole span
+     * repairs those paths as well.
+     */
+    public static function replaceRepoPathHost(string $path, string $host): ?string
+    {
+        if (preg_match('#^(ssh://[^@/]+@)(.+?)(/\./.*|///.*)$#s', $path, $m)) {
+            return $m[1] . $host . $m[3];
+        }
+        return preg_replace_callback(
+            '/^(ssh:\/\/[^@\/]+@)[^\/]+/',
+            fn($m) => $m[1] . $host,
+            $path
+        );
     }
 
     /**
