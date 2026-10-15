@@ -1,7 +1,8 @@
 name: Reopen issue on comment
 
 # A comment on a closed issue from anyone other than the maintainer or a bot
-# reopens it, so follow-ups after a fix don't go unseen.
+# reopens it, so follow-ups after a fix don't go unseen. A short "works now,
+# thanks" stays closed; .github/scripts/is-thanks.py decides.
 on:
   issue_comment:
     types: [created]
@@ -18,8 +19,17 @@ jobs:
       github.event.comment.user.type != 'Bot'
     runs-on: ubuntu-latest
     steps:
-      - run: gh issue reopen "$ISSUE" --repo "$REPO"
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/scripts
+      - run: |
+          if printf '%s' "$BODY" | python3 -I .github/scripts/is-thanks.py; then
+            echo "Comment only says thanks; leaving #$ISSUE closed."
+          else
+            gh issue reopen "$ISSUE" --repo "$REPO"
+          fi
         env:
+          BODY: ${{ github.event.comment.body }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           ISSUE: ${{ github.event.issue.number }}
           REPO: ${{ github.repository }}
