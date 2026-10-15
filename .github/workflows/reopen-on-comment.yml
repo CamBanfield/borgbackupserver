@@ -1,0 +1,25 @@
+name: Reopen issue on comment
+
+# A comment on a closed issue from anyone other than the maintainer or a bot
+# reopens it, so follow-ups after a fix don't go unseen.
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  issues: write
+
+jobs:
+  reopen:
+    if: >-
+      github.event.issue.state == 'closed' &&
+      github.event.issue.pull_request == null &&
+      github.event.comment.user.login != github.repository_owner &&
+      github.event.comment.user.type != 'Bot'
+    runs-on: ubuntu-latest
+    steps:
+      - run: gh issue reopen "$ISSUE" --repo "$REPO"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ISSUE: ${{ github.event.issue.number }}
+          REPO: ${{ github.repository }}
